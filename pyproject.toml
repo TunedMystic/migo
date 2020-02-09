@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "migo"
-version = "0.0.1"
+version = "0.0.2"
 description = "Simple async migrations for postgres."
 authors = ["Sandeep Jadoonanan <jsanweb@gmail.com>"]
 license = "MIT"
