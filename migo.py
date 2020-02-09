@@ -201,7 +201,7 @@ def get_parser():
 # Main entrypoint
 # -----------------------------------------------
 
-async def main():
+async def handle():
     parser = get_parser()
     args = parser.parse_args()
 
@@ -226,6 +226,6 @@ async def main():
     parser.print_help()
 
 
-if __name__ == '__main__':
+def main():
     loop = asyncio.get_event_loop()
-    loop.run_until_complete(main())
+    loop.run_until_complete(handle())
