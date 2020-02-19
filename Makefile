@@ -15,7 +15,7 @@ venv:  ## Setup virtual environment
 
 install: venv  ## Install dev dependencies
 	@( \
-		source venv/bin/activate; \
+		. venv/bin/activate; \
 		pip install --upgrade pip; \
 		pip install -r requirements-dev.txt; \
 	)
@@ -23,6 +23,6 @@ install: venv  ## Install dev dependencies
 test:  ## Run tests
 	@echo "Running tests"
 	@( \
-		source venv/bin/activate; \
+		. venv/bin/activate; \
 		python -m unittest; \
 	)
