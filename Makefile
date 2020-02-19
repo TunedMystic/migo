@@ -26,3 +26,6 @@ test:  ## Run tests
 		. venv/bin/activate; \
 		python -m unittest; \
 	)
+
+database:  ## Run docker database
+	@docker run -d --name db -p 5432:5432 postgres:11-alpine
