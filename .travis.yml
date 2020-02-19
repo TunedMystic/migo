@@ -3,16 +3,16 @@ language: python
 python:
   - "3.7.3"
 
-services: postgresql
-addons:
-  postgresql: "11"
+services: docker
 
 env:
   global:
-    - DATABASE_DSN=postgresql://postgres:@localhost:5432/postgres
+    - DATABASE_DSN=postgresql://postgres:postgres@localhost:5432/postgres
 
 cache: pip
 
-install: make install
+install:
+    - make install
+    - docker run -d --name db -p 5432:5432 postgres:11-alpine
 
 script: make test
