@@ -16,7 +16,6 @@ venv:  ## Setup virtual environment
 install: venv  ## Install dev dependencies
 	@( \
 		. venv/bin/activate; \
-		pip install --upgrade pip; \
 		pip install -r requirements-dev.txt; \
 	)
 
