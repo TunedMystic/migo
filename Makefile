@@ -28,4 +28,4 @@ test:  ## Run tests
 	)
 
 database:  ## Run docker database
-	@docker run -d --name db -p 5432:5432 postgres:11-alpine
+	@docker run -d --name db -p 5432:5432 -e POSTGRES_PASSWORD=postgres -e POSTGRES_USER=postgres postgres:11-alpine

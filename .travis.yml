@@ -1,9 +1,12 @@
 language: python
 
-python:
-  - "3.7.3"
+python: "3.7.3"
 
 services: docker
+
+branches:
+    only:
+      - master
 
 env:
   global:
@@ -11,10 +14,9 @@ env:
 
 cache: pip
 
-install:
-    - make install
+install: make install
 
 before_script:
-    - docker run -d --name db -p 5432:5432 postgres:11-alpine
+    - docker run -d --name db -p 5432:5432 -e POSTGRES_PASSWORD=postgres -e POSTGRES_USER=postgres postgres:11-alpine
 
 script: make test
