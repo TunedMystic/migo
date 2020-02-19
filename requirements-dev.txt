@@ -1,0 +1,4 @@
+-r requirements.txt
+
+coverage==5.0
+flake8==3.7.9
