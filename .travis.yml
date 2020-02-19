@@ -13,7 +13,8 @@ cache: pip
 
 install:
     - make install
-    - sleep 3
+
+before_script:
     - docker run -d --name db -p 5432:5432 postgres:11-alpine
 
 script: make test
