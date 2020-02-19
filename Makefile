@@ -1,3 +1,5 @@
+DB_RUNNING := $(shell docker inspect -f '{{.State.Running}}' db 2>/dev/null)
+
 .PHONY: dev help venv
 
 help: ## This help
@@ -27,4 +29,8 @@ test:  ## Run tests
 	)
 
 database:  ## Run docker database
-	@docker run -d --name db -p 5432:5432 -e POSTGRES_PASSWORD=postgres -e POSTGRES_USER=postgres postgres:11-alpine
+ifeq ($(DB_RUNNING), true)
+	@echo "DB container is running";
+else
+	@echo "Going to run db container";
+endif
