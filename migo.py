@@ -23,15 +23,15 @@ class Migrator:
         CREATE TABLE IF NOT EXISTS __migrations (
             id SERIAL PRIMARY KEY,
             name VARCHAR(50) NOT NULL,
-            head INT NOT NULL
+            revision INT NOT NULL
         );
     '''
 
     _check_migrations_table = 'SELECT 1 FROM __migrations;'
 
-    _get_latest_migration_head = 'SELECT head FROM __migrations ORDER BY head DESC LIMIT 1;'
+    _latest_migration_revision = 'SELECT revision FROM __migrations ORDER BY revision DESC LIMIT 1;'
 
-    _insert_migration_row = 'INSERT INTO __migrations (name, head) VALUES ($1, $2);'
+    _insert_migration = 'INSERT INTO __migrations (name, revision) VALUES ($1, $2);'
 
     def __init__(self, dsn):
         self.dsn = dsn or self.DEFAULT_DSN
@@ -89,21 +89,21 @@ class Migrator:
             async with self.conn.transaction():
                 await self.conn.execute(sql)
 
-    async def _get_migration_head(self):
+    async def _get_latest_revision(self):
         """
-        Get the index of the latest completed migration from the db.
+        Get the revision code of the latest completed migration from the db.
 
         Returns:
             int: The migration revision.
         """
-        head = await self.conn.fetchval(self._get_latest_migration_head)
-        return head or 0
+        revision = await self.conn.fetchval(self._latest_migration_revision)
+        return revision or 0
 
     async def _run_migration(self, index, script_name):
-        head = await self._get_migration_head()
+        revision = await self._get_latest_revision()
 
         # Do not proceed if the migration has already been run.
-        if index <= head:
+        if index <= revision:
             return
 
         logger.info(f'''[~]  {script_name} Running migration...''')
@@ -112,14 +112,14 @@ class Migrator:
         await self._execute_sql_script(script_name)
 
         # Save the migration metadata to the db.
-        await self.conn.execute(self._insert_migration_row, script_name, index)
+        await self.conn.execute(self._insert_migration, script_name, index)
 
         logger.info(f'''     ✅''')
 
     async def setup(self):
         """
-        Make db connection and check that the `__migrations` table exists.
-        If not then we create the table and insert the migration counter.
+        Make the db connection and check if the `__migrations` table exists.
+        If not, then we create the `__migrations` table.
         """
         self.conn = await asyncpg.connect(self.dsn)
 
@@ -133,9 +133,9 @@ class Migrator:
             await self._run_migration(index, script_name)
 
     async def list_all_migrations(self):
-        head = await self._get_migration_head()
+        revision = await self._get_latest_revision()
         for index, script_name in self._get_migration_scripts():
-            logger.info(f'''[{'x' if index <= head else ' '}]  {script_name}''')
+            logger.info(f'''[{'x' if index <= revision else ' '}]  {script_name}''')
 
     async def new_migration_script(self, script_name):
         """
@@ -149,7 +149,7 @@ class Migrator:
                                     If None, then a name will be generated.
         """
 
-        # Get the latest migration script index.
+        # Get the index of the latest migration script.
         try:
             index, _ = self._get_migration_scripts()[-1]
         except IndexError:
