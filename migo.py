@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 class Migrator:
+    DEFAULT_DSN = 'postgresql://postgres:postgres@localhost:5432/postgres'
     MIGRATIONS_DIR = 'sql'
 
     _create_migrations_table = '''
@@ -34,39 +35,41 @@ class Migrator:
     _insert_migration_row = 'INSERT INTO __migrations (name, head) VALUES ($1, $2);'
 
     def __init__(self, dsn):
-        self.dsn = dsn
+        self.dsn = dsn or self.DEFAULT_DSN
         self.conn = None
 
-    def _log_migration(self, script_name, completed):
-        logger.info(f'''[{'x' if completed else ' '}]  {script_name}''')
-
     def _get_migration_scripts(self):
+        """
+        Get the migrations scripts in the following form:
+            [
+                (1, '1_abc.sql'),
+                (2, '2_def.sql'),
+            ]
+
+        Returns:
+            List[Tuple[int, str]]: The migration scripts.
+
+        Raises:
+            Exception: When a migration script does not start with a number.
+        """
         migration_scripts = []
 
-        self._ensure_migrations_dir()
+        # Create the migrations directory if it does not exist.
+        if not os.path.exists(self.MIGRATIONS_DIR):
+            os.makedirs(self.MIGRATIONS_DIR, exist_ok=True)
 
+        # Gather all the sql scripts.
         scripts = os.listdir(self.MIGRATIONS_DIR)
+        scripts = [name for name in scripts if name.endswith('.sql')]
 
         for script_name in scripts:
-            if not script_name.endswith('.sql'):
-                continue
             try:
                 index = script_name.split('_')[0]
                 migration_scripts.append((int(index), script_name))
             except ValueError:
-                raise Exception(
-                    f'Migration "{script_name}" '
-                    'must start with a number')
+                raise Exception(f'Migration "{script_name}" must start with a number')
 
         return sorted(migration_scripts)
-
-    def _ensure_migrations_dir(self):
-        """
-        Create the migrations directory if it does not exist.
-        """
-        if not os.path.exists(self.MIGRATIONS_DIR):
-            logger.info(f'Created migrations directory: {self.MIGRATIONS_DIR}')
-            os.makedirs(self.MIGRATIONS_DIR, exist_ok=True)
 
     async def _execute_sql_script(self, script_name):
         """
@@ -90,6 +93,9 @@ class Migrator:
     async def _get_migration_head(self):
         """
         Get the index of the latest completed migration from the db.
+
+        Returns:
+            int: The migration revision.
         """
         _row = await self.conn.fetchrow(self._get_first_migration_row)
         return _row['head']
@@ -101,26 +107,15 @@ class Migrator:
         if index <= head:
             return
 
-        self._log_migration(script_name, index <= head)
-
-        logger.info(f'   - Running migration\n')
+        logger.info(f'''[~]  {script_name} Running migration...''')
 
         # Execute the migration script.
         await self._execute_sql_script(script_name)
 
         # Update the migration head.
-        await self.conn.execute(self._update_migration_row,
-                                script_name,
-                                index)
+        await self.conn.execute(self._update_migration_row, script_name, index)
 
-    async def run_migrations(self):
-        for index, script_name in self._get_migration_scripts():
-            await self._run_migration(index, script_name)
-
-    async def list_all_migrations(self):
-        head = await self._get_migration_head()
-        for index, script_name in self._get_migration_scripts():
-            self._log_migration(script_name, index <= head)
+        logger.info(f'''     ✅''')
 
     async def setup(self):
         """
@@ -135,6 +130,15 @@ class Migrator:
             await self.conn.execute(self._create_migrations_table)
             await self.conn.execute(self._insert_migration_row, 'initial', 0)
 
+    async def run_migrations(self):
+        for index, script_name in self._get_migration_scripts():
+            await self._run_migration(index, script_name)
+
+    async def list_all_migrations(self):
+        head = await self._get_migration_head()
+        for index, script_name in self._get_migration_scripts():
+            logger.info(f'''[{'x' if index <= head else ' '}]  {script_name}''')
+
     async def new_migration_script(self, script_name):
         """
         Create a new script in the migrations directory.
@@ -146,6 +150,8 @@ class Migrator:
             script_name (str|None): The name of the new migration script.
                                     If None, then a name will be generated.
         """
+
+        # Get the latest migration script index.
         try:
             index, _ = self._get_migration_scripts()[-1]
         except IndexError:
@@ -171,27 +177,20 @@ class Migrator:
 def get_parser():
     description = 'Simple async postgres migrations'
     parser = argparse.ArgumentParser(description=description)
-    parser.add_argument('-d',
-                        '--dsn',
-                        help=f'data source name (protocol://user:pass@host:port/db)')
-    parser.set_defaults(action=None,
-                        dsn='postgresql://postgres:postgres@localhost:5432/postgres')
+    parser.add_argument('-d', '--dsn', help='protocol://user:pass@host:port/db')
+    parser.set_defaults(action=None, dsn=None)
 
-    subparsers = parser.add_subparsers()
+    subparsers = parser.add_subparsers(description='')
 
     list_parser = subparsers.add_parser('list', help='List all migrations')
     list_parser.set_defaults(action='list')
 
     new_parser = subparsers.add_parser('new', help='Create new migration')
-    new_parser.add_argument('name',
-                            nargs='?',
-                            help='(optional) name of new migration script')
+    new_parser.add_argument('name', nargs='?', help='(optional) name of new migration script')
     new_parser.set_defaults(action='new')
 
     migrate_parser = subparsers.add_parser('migrate', help='Run migrations')
-    migrate_parser.add_argument('name',
-                                nargs='?',
-                                help='(optional) name/number of migration to run')
+    migrate_parser.add_argument('name', nargs='?', help='(optional) name of migration to run')
     migrate_parser.set_defaults(action='migrate')
 
     return parser
