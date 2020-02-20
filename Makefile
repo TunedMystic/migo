@@ -19,8 +19,6 @@ test:  ## Run tests
 	@poetry run coverage report
 
 database:  ## Run docker database
-# Make var at execution time
-# Ref: https://stackoverflow.com/a/1909390
 	@DB_RUNNING=$$(docker inspect -f '{{.State.Running}}' db 2>/dev/null); \
 	if [ "$$DB_RUNNING" = "true" ]; then \
 		echo "DB container is already running"; \
@@ -41,17 +39,18 @@ clean:  ## Clean workspace
 	@rm -rf dist
 
 publish-test:  ## Publish to test PyPI
-# To publish to test pypi, you have to configure the repository url in poetry first.
-#
-# poetry config repositories.testpypi https://test.pypi.org/legacy/
-# poetry publish -r testpypi --username USERNAME --password PASSWORD --build
+	# To publish to test pypi, you have to configure the repository url in poetry first.
+	#
+	#   $$ poetry config repositories.testpypi https://test.pypi.org/legacy/
+	#
+	@echo ""
 	@echo -e "Publishing to PyPI test\n"
 	@read -p "Username: " username; \
 	read -p "Password: " password; \
-	echo "poetry publish -r https://test.pypi.org/legacy/ --username $$username --password $$password --build"
+	poetry publish -r testpypi --username $$username --password $$password --build
 
 publish:  ## Publish to PyPI
 	@echo -e "Publishing to PyPI\n"
 	@read -p "Username: " username; \
 	read -p "Password: " password; \
-	echo "poetry publish --username $$username --password $$password --build"
+	poetry publish --username $$username --password $$password --build
