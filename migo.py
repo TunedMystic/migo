@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 class Migrator:
     DEFAULT_DSN = 'postgresql://postgres:postgres@localhost:5432/postgres'
+
     MIGRATIONS_DIR = 'sql'
 
     _create_migrations_table = '''
@@ -28,9 +29,7 @@ class Migrator:
 
     _check_migrations_table = 'SELECT 1 FROM __migrations;'
 
-    _get_first_migration_row = 'SELECT head FROM __migrations LIMIT 1;'
-
-    _update_migration_row = 'UPDATE __migrations SET name = $1, head = $2;'
+    _get_latest_migration_head = 'SELECT head FROM __migrations ORDER BY head DESC LIMIT 1;'
 
     _insert_migration_row = 'INSERT INTO __migrations (name, head) VALUES ($1, $2);'
 
@@ -97,8 +96,8 @@ class Migrator:
         Returns:
             int: The migration revision.
         """
-        _row = await self.conn.fetchrow(self._get_first_migration_row)
-        return _row['head']
+        head = await self.conn.fetchval(self._get_latest_migration_head)
+        return head or 0
 
     async def _run_migration(self, index, script_name):
         head = await self._get_migration_head()
@@ -112,8 +111,8 @@ class Migrator:
         # Execute the migration script.
         await self._execute_sql_script(script_name)
 
-        # Update the migration head.
-        await self.conn.execute(self._update_migration_row, script_name, index)
+        # Save the migration metadata to the db.
+        await self.conn.execute(self._insert_migration_row, script_name, index)
 
         logger.info(f'''     ✅''')
 
@@ -128,7 +127,6 @@ class Migrator:
             await self.conn.execute(self._check_migrations_table)
         except asyncpg.exceptions.UndefinedTableError:
             await self.conn.execute(self._create_migrations_table)
-            await self.conn.execute(self._insert_migration_row, 'initial', 0)
 
     async def run_migrations(self):
         for index, script_name in self._get_migration_scripts():
