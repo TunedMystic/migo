@@ -14,6 +14,8 @@ env:
 
 cache: pip
 
+before_install: pip install poetry
+
 install: make install
 
 before_script:

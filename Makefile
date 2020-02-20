@@ -7,7 +7,7 @@ help: ## This help
 	@echo "Targets:"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[1m%-15s\033[0m %s\n", $$1, $$2}'
 
-install: venv  ## Install dev dependencies
+install:  ## Install dev dependencies
 	@echo "Installing dependencies"
 	@poetry install
 
