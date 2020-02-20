@@ -1,6 +1,4 @@
-DB_RUNNING := $(shell docker inspect -f '{{.State.Running}}' db 2>/dev/null)
-
-.PHONY: dev help venv
+.PHONY: help install test database remove
 
 help: ## This help
 	@echo "Usage:"
@@ -9,28 +7,22 @@ help: ## This help
 	@echo "Targets:"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[1m%-15s\033[0m %s\n", $$1, $$2}'
 
-venv:  ## Setup virtual environment
-	@if [ ! -d "venv" ]; then \
-		echo "making virtual env"; \
-		python3 -m venv venv; \
-	fi
-
 install: venv  ## Install dev dependencies
-	@( \
-		. venv/bin/activate; \
-		pip install -r requirements-dev.txt; \
-	)
+	@echo "Installing dependencies"
+	@poetry install
 
 test:  ## Run tests
 	@echo "Running tests"
-	@( \
-		. venv/bin/activate; \
-		python -m unittest; \
-	)
+	@poetry run python -m unittest
 
 database:  ## Run docker database
-ifeq ($(DB_RUNNING), true)
-	@echo "DB container is running";
-else
-	@echo "Going to run db container";
+# Make var at execution time
+# Ref: https://stackoverflow.com/a/1909390
+	$(eval DB_RUNNING := $(shell docker inspect -f '{{.State.Running}}' db 2>/dev/null))
+
+ifneq ($(DB_RUNNING), true)
+	@docker run -d --name db -p 5432:5432 -e POSTGRES_PASSWORD=postgres -e POSTGRES_USER=postgres postgres:11-alpine
 endif
+
+remove:  ## Remove docker database
+	@docker container rm -fv db 2>/dev/null
