@@ -16,7 +16,6 @@ logging.basicConfig(level=logging.WARNING)
 
 
 class MigoTestCase(TestCase):
-
     def tearDown(self):
         self._remove_migrations_dir()
 
@@ -28,25 +27,23 @@ class MigoTestCase(TestCase):
         loop = asyncio.get_event_loop()
         loop.run_until_complete(func())
 
-    async def _drop_tables(self):
-        conn = await asyncpg.connect(DATABASE_DSN)
-        await conn.execute('''DROP TABLE IF EXISTS __migrations;''')
-        await conn.close()
-
-    def _remove_migrations_dir(self):
-        shutil.rmtree(MIGRATIONS_DIR, ignore_errors=True)
-
     def _make_migrations_dir(self, filenames=[]):
         os.makedirs(MIGRATIONS_DIR, exist_ok=True)
         for filename in filenames:
             with open(f'{MIGRATIONS_DIR}/{filename}', 'w') as fp:
                 fp.write('select 1;')
 
-    # ---------------------------------------------------------------
-    # Migrator
-    # ---------------------------------------------------------------
+    def _remove_migrations_dir(self):
+        shutil.rmtree(MIGRATIONS_DIR, ignore_errors=True)
 
-    def test__connect(self):
+    async def _drop_tables(self):
+        conn = await asyncpg.connect(DATABASE_DSN)
+        await conn.execute('''DROP TABLE IF EXISTS __migrations;''')
+        await conn.close()
+
+
+class TestMigratorInit(MigoTestCase):
+    def test_migo_connection(self):
         async def _test():
             conn = await asyncpg.connect(DATABASE_DSN)
             row = await conn.fetchrow('''select 'hi' as message;''')
@@ -54,18 +51,15 @@ class MigoTestCase(TestCase):
 
         self._run(_test)
 
-    def test__setup(self):
+    def test__setup__check_migration_table_exists(self):
         async def _test():
             await self._drop_tables()
 
-            # Tables do not exist.
             m = migo.Migrator()
             await m.setup()
-            await m.close()
 
-            # Tables exist.
-            m = migo.Migrator()
-            await m.setup()
+            # Check that the migrations table exists.
+            await m.conn.execute(m._check_migrations_table)
             await m.close()
 
         self._run(_test)
@@ -77,11 +71,9 @@ class MigoTestCase(TestCase):
 
         self._run(_test)
 
-    # ---------------------------------------------------------------
-    # Latest revision
-    # ---------------------------------------------------------------
 
-    def test__latest_revision(self):
+class TestLatestRevision(MigoTestCase):
+    def test__latest_revision__with_single__migration(self):
         async def _test():
             await self._drop_tables()
 
@@ -130,6 +122,8 @@ class MigoTestCase(TestCase):
 
         self._run(_test)
 
+
+class TestListMigrations(MigoTestCase):
     # ---------------------------------------------------------------
     # List migrations
     # ---------------------------------------------------------------
@@ -206,116 +200,6 @@ class MigoTestCase(TestCase):
         self._run(_test)
 
     # ---------------------------------------------------------------
-    # Migration scripts
-    # ---------------------------------------------------------------
-
-    def test__get_migration_scripts__returns_empty_list_when_no_migrations(self):
-        self._remove_migrations_dir()
-
-        m = migo.Migrator()
-        m.MIGRATIONS_DIR = MIGRATIONS_DIR
-        scripts = m._get_migration_scripts()
-
-        self.assertEqual(scripts, [])
-
-    def test__get_migration_scripts__fails_when_migration_does_not_start_with_number(self):
-        self._remove_migrations_dir()
-        self._make_migrations_dir([
-            '1_some_migration.sql',
-            'another_migration.sql',
-        ])
-
-        m = migo.Migrator()
-        m.MIGRATIONS_DIR = MIGRATIONS_DIR
-
-        with self.assertRaises(Exception) as exc:
-            m._get_migration_scripts()
-
-        expected_exception = 'Migration "another_migration.sql" must start with a number'
-        self.assertEqual(expected_exception, str(exc.exception))
-
-    def test__get_migration_scripts__ignores_non_sql_files(self):
-        self._remove_migrations_dir()
-        self._make_migrations_dir([
-            '1_some_migration.sql',
-            '2_another_migration.sql',
-            '3_another_one.py',
-        ])
-
-        m = migo.Migrator()
-        m.MIGRATIONS_DIR = MIGRATIONS_DIR
-        scripts = m._get_migration_scripts()
-
-        self.assertEqual(scripts, [
-            (1, '1_some_migration.sql'),
-            (2, '2_another_migration.sql'),
-        ])
-
-    def test__get_migration_scripts__return_list_is_sorted(self):
-        self._remove_migrations_dir()
-        self._make_migrations_dir([
-            '3_another_one.sql',
-            '1_some_migration.sql',
-            '2_another_migration.sql',
-        ])
-
-        m = migo.Migrator()
-        m.MIGRATIONS_DIR = MIGRATIONS_DIR
-        scripts = m._get_migration_scripts()
-
-        self.assertEqual(scripts, [
-            (1, '1_some_migration.sql'),
-            (2, '2_another_migration.sql'),
-            (3, '3_another_one.sql'),
-        ])
-
-    # ---------------------------------------------------------------
-    # Execute sql script
-    # ---------------------------------------------------------------
-
-    def test__execute_sql_script(self):
-        async def _test():
-            await self._drop_tables()
-
-            m = migo.Migrator()
-            m.MIGRATIONS_DIR = MIGRATIONS_DIR
-            await m.setup()
-
-            await m._execute_sql_script('1_some_migration.sql')
-            await m.close()
-
-        self._remove_migrations_dir()
-        self._make_migrations_dir(['1_some_migration.sql'])
-        self._run(_test)
-
-    def test__execute_sql_script__fails_when_script_is_empty(self):
-        async def _test():
-            await self._drop_tables()
-
-            m = migo.Migrator()
-            m.MIGRATIONS_DIR = MIGRATIONS_DIR
-            await m.setup()
-
-            with self.assertRaises(Exception) as exc:
-                await m._execute_sql_script('1_some_migration.sql')
-
-            expected_exception = 'Migration "1_some_migration.sql" is empty'
-            self.assertEqual(expected_exception, str(exc.exception))
-
-            await m.close()
-
-        # ------------
-
-        self._remove_migrations_dir()
-        self._make_migrations_dir()
-
-        # Make an empty migration file.
-        with open(f'{MIGRATIONS_DIR}/1_some_migration.sql', 'w') as fp:
-            fp.write('')
-
-        self._run(_test)
-
-    # ---------------------------------------------------------------
     # New migration script
     # ---------------------------------------------------------------
 
@@ -337,7 +221,6 @@ class MigoTestCase(TestCase):
 
         # ------------
 
-        self._remove_migrations_dir()
         self._make_migrations_dir()
         self._run(_test)
 
@@ -357,6 +240,11 @@ class MigoTestCase(TestCase):
             self.assertEqual(len(script_names), 2)
             self.assertTrue(script_names[-1].startswith('2_'))
 
+        # ------------
+
+        self._make_migrations_dir(['1_some_migration.sql'])
+        self._run(_test)
+
     def test__new_migration_script__with_custom_script_name(self):
         async def _test():
             m = migo.Migrator()
@@ -372,20 +260,112 @@ class MigoTestCase(TestCase):
 
         # ------------
 
-        self._remove_migrations_dir()
         self._make_migrations_dir()
         self._run(_test)
 
 
-class ParserTestCase(TestCase):
-    # ---------------------------------------------------------------
-    # Helper methods
-    # ---------------------------------------------------------------
+class TestMigrationScripts(MigoTestCase):
+    def test__get_migration_scripts__returns_empty_list_when_no_migrations(self):
+        m = migo.Migrator()
+        m.MIGRATIONS_DIR = MIGRATIONS_DIR
+        scripts = m._get_migration_scripts()
 
-    def _run(self, func):
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(func())
+        self.assertEqual(scripts, [])
 
+    def test__get_migration_scripts__fails_when_migration_does_not_start_with_number(self):
+        self._make_migrations_dir([
+            '1_some_migration.sql',
+            'another_migration.sql',
+        ])
+
+        m = migo.Migrator()
+        m.MIGRATIONS_DIR = MIGRATIONS_DIR
+
+        with self.assertRaises(Exception) as exc:
+            m._get_migration_scripts()
+
+        expected_exception = 'Migration "another_migration.sql" must start with a number'
+        self.assertEqual(expected_exception, str(exc.exception))
+
+    def test__get_migration_scripts__ignores_non_sql_files(self):
+        self._make_migrations_dir([
+            '1_some_migration.sql',
+            '2_another_migration.sql',
+            '3_another_one.py',
+        ])
+
+        m = migo.Migrator()
+        m.MIGRATIONS_DIR = MIGRATIONS_DIR
+        scripts = m._get_migration_scripts()
+
+        self.assertEqual(scripts, [
+            (1, '1_some_migration.sql'),
+            (2, '2_another_migration.sql'),
+        ])
+
+    def test__get_migration_scripts__return_list_is_sorted(self):
+        self._make_migrations_dir([
+            '3_another_one.sql',
+            '1_some_migration.sql',
+            '2_another_migration.sql',
+        ])
+
+        m = migo.Migrator()
+        m.MIGRATIONS_DIR = MIGRATIONS_DIR
+        scripts = m._get_migration_scripts()
+
+        self.assertEqual(scripts, [
+            (1, '1_some_migration.sql'),
+            (2, '2_another_migration.sql'),
+            (3, '3_another_one.sql'),
+        ])
+
+
+class TestExecuteSQLScript(MigoTestCase):
+    def test__execute_sql_script__success(self):
+        async def _test():
+            await self._drop_tables()
+
+            m = migo.Migrator()
+            m.MIGRATIONS_DIR = MIGRATIONS_DIR
+            await m.setup()
+
+            await m._execute_sql_script('1_some_migration.sql')
+            await m.close()
+
+        # ------------
+
+        self._make_migrations_dir(['1_some_migration.sql'])
+        self._run(_test)
+
+    def test__execute_sql_script__fails_when_script_is_empty(self):
+        async def _test():
+            await self._drop_tables()
+
+            m = migo.Migrator()
+            m.MIGRATIONS_DIR = MIGRATIONS_DIR
+            await m.setup()
+
+            with self.assertRaises(Exception) as exc:
+                await m._execute_sql_script('1_some_migration.sql')
+
+            expected_exception = 'Migration "1_some_migration.sql" is empty'
+            self.assertEqual(expected_exception, str(exc.exception))
+
+            await m.close()
+
+        # ------------
+
+        self._make_migrations_dir()
+
+        # Make an empty migration file.
+        with open(f'{MIGRATIONS_DIR}/1_some_migration.sql', 'w') as fp:
+            fp.write('')
+
+        self._run(_test)
+
+
+class TestParser(MigoTestCase):
     def test__handle__list_migrations(self):
         @mock.patch('migo.Migrator.setup')
         @mock.patch('migo.Migrator.list_all_migrations')
