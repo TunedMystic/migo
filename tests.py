@@ -12,6 +12,11 @@ MIGRATIONS_DIR = 'sql-test'
 
 
 class SimpleTestCase(TestCase):
+
+    # ---------------------------------------------------------------
+    # Helper methods
+    # ---------------------------------------------------------------
+
     def _run(self, func):
         loop = asyncio.get_event_loop()
         loop.run_until_complete(func())
@@ -29,6 +34,10 @@ class SimpleTestCase(TestCase):
         for filename in filenames:
             with open(f'{MIGRATIONS_DIR}/{filename}', 'w') as fp:
                 fp.write('select 1;')
+
+    # ---------------------------------------------------------------
+    # Migrator
+    # ---------------------------------------------------------------
 
     def test__connect(self):
         async def _test():
@@ -52,19 +61,14 @@ class SimpleTestCase(TestCase):
 
         self._run(_test)
 
-    def test__latest_revision_is_zero_when_no_migrations_exist(self):
+    # ---------------------------------------------------------------
+    # Latest revision
+    # ---------------------------------------------------------------
+
+    def test__latest_revision(self):
         async def _test():
             await self._drop_tables()
-            m = migo.Migrator()
-            await m.setup()
-            revision = await m._get_latest_revision()
-            self.assertEqual(revision, 0)
 
-        self._run(_test)
-
-    def test__latest_revision_when_migrations_exist(self):
-        async def _test():
-            await self._drop_tables()
             m = migo.Migrator()
             m._execute_sql_script = mock.AsyncMock()
 
@@ -77,8 +81,26 @@ class SimpleTestCase(TestCase):
 
         self._run(_test)
 
+    def test__latest_revision_is_zero_when_no_migrations_exist(self):
+        async def _test():
+            await self._drop_tables()
+
+            m = migo.Migrator()
+            await m.setup()
+
+            revision = await m._get_latest_revision()
+            self.assertEqual(revision, 0)
+
+        self._run(_test)
+
+    # ---------------------------------------------------------------
+    # List migrations
+    # ---------------------------------------------------------------
+
     def test__list_all_migrations(self):
         async def _test():
+            await self._drop_tables()
+
             m = migo.Migrator()
 
             m._execute_sql_script = mock.AsyncMock()
@@ -92,6 +114,52 @@ class SimpleTestCase(TestCase):
             await m._run_migration(1, '1_some_migration.sql')
 
             await m.list_all_migrations()
+
+        self._run(_test)
+
+    # ---------------------------------------------------------------
+    # Run migrations
+    # ---------------------------------------------------------------
+
+    def test__run_migrations__with_single_migration(self):
+        async def _test():
+            await self._drop_tables()
+
+            m = migo.Migrator()
+
+            m._execute_sql_script = mock.AsyncMock()
+            m._get_migration_scripts = mock.MagicMock()
+            m._get_migration_scripts.return_value = [
+                (1, '1_some_migration.sql'),
+            ]
+
+            await m.setup()
+            await m.run_migrations()
+
+            revision = await m._get_latest_revision()
+            self.assertEqual(revision, 1)
+
+        self._run(_test)
+
+    def test__run_migrations__with_migration_that_already_ran(self):
+        async def _test():
+            await self._drop_tables()
+
+            m = migo.Migrator()
+
+            m._execute_sql_script = mock.AsyncMock()
+            m._get_migration_scripts = mock.MagicMock()
+            m._get_migration_scripts.return_value = [
+                (1, '1_some_migration.sql'),
+                (2, '2_another_migration.sql'),
+            ]
+
+            await m.setup()
+            await m._run_migration(1, '1_some_migration.sql')
+            await m.run_migrations()
+
+            revision = await m._get_latest_revision()
+            self.assertEqual(revision, 2)
 
         self._run(_test)
 
