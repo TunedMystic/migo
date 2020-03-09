@@ -9,7 +9,7 @@ import uuid
 import aiofiles
 import asyncpg
 
-log_level = os.getenv('MIGO_LOG_LEVEL', 'WARNING')
+log_level = os.getenv('MIGO_LOG_LEVEL', 'INFO')
 log_level = logging.getLevelName(log_level)
 logging.basicConfig(level=log_level, format='%(message)s')
 logger = logging.getLogger(__name__)

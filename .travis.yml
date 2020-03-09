@@ -11,6 +11,7 @@ branches:
 env:
   global:
     - PROJECT_NAME=migo
+    - MIGO_LOG_LEVEL=WARNING
 
 cache: pip
 
