@@ -4,13 +4,14 @@ import argparse
 import asyncio
 import logging
 import os
-import sys
 import uuid
 
 import aiofiles
 import asyncpg
 
-logging.basicConfig(level=logging.INFO, format='%(message)s')
+log_level = os.getenv('MIGO_LOG_LEVEL', 'WARNING')
+log_level = logging.getLevelName(log_level)
+logging.basicConfig(level=log_level, format='%(message)s')
 logger = logging.getLogger(__name__)
 
 
@@ -36,6 +37,10 @@ class Migrator:
     def __init__(self, dsn=None):
         self.dsn = dsn or self.DEFAULT_DSN
         self.conn = None
+
+    async def close(self):
+        if self.conn:
+            await self.conn.close()
 
     def _get_migration_scripts(self):
         """
@@ -137,7 +142,7 @@ class Migrator:
         for index, script_name in self._get_migration_scripts():
             logger.info(f'''[{'x' if index <= revision else ' '}]  {script_name}''')
 
-    async def new_migration_script(self, script_name):
+    async def new_migration_script(self, script_name=None):
         """
         Create a new script in the migrations directory.
 
@@ -208,17 +213,20 @@ async def handle():
     # List all migrations.
     if args.action == 'list':
         await mg.list_all_migrations()
-        sys.exit(0)
+        await mg.close()
+        return
 
     # Create a new migration file.
     if args.action == 'new':
         await mg.new_migration_script(args.name)
-        sys.exit(0)
+        await mg.close()
+        return
 
     # Run migrations.
     if args.action == 'migrate':
         await mg.run_migrations()
-        sys.exit(0)
+        await mg.close()
+        return
 
     parser.print_help()
 
