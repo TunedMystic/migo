@@ -10,7 +10,7 @@ branches:
 
 env:
   global:
-    - DATABASE_DSN=postgresql://postgres:postgres@localhost:5432/postgres
+    - PROJECT_NAME=migo
 
 cache: pip
 

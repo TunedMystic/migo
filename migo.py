@@ -33,7 +33,7 @@ class Migrator:
 
     _insert_migration = 'INSERT INTO __migrations (name, revision) VALUES ($1, $2);'
 
-    def __init__(self, dsn):
+    def __init__(self, dsn=None):
         self.dsn = dsn or self.DEFAULT_DSN
         self.conn = None
 

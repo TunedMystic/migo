@@ -6,7 +6,7 @@ authors = ["Sandeep Jadoonanan <jsanweb@gmail.com>"]
 license = "MIT"
 
 [tool.poetry.dependencies]
-python = "^3.6"
+python = "^3.8.1"
 asyncpg = "^0.20.1"
 aiofiles = "^0.4.0"
 
