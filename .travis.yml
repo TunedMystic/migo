@@ -1,6 +1,6 @@
 language: python
 
-python: "3.7.3"
+python: "3.8.1"
 
 services: docker
 
@@ -10,7 +10,8 @@ branches:
 
 env:
   global:
-    - DATABASE_DSN=postgresql://postgres:postgres@localhost:5432/postgres
+    - PROJECT_NAME=migo
+    - MIGO_LOG_LEVEL=WARNING
 
 cache: pip
 

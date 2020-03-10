@@ -4,14 +4,13 @@ import argparse
 import asyncio
 import logging
 import os
-import sys
 import uuid
 
 import aiofiles
 import asyncpg
 
-logging.basicConfig(level=logging.INFO, format='%(message)s')
-logger = logging.getLogger(__name__)
+log_level = logging.getLevelName(os.getenv('MIGO_LOG_LEVEL', 'INFO'))
+logging.basicConfig(level=log_level, format='%(message)s')
 
 
 class Migrator:
@@ -33,9 +32,13 @@ class Migrator:
 
     _insert_migration = 'INSERT INTO __migrations (name, revision) VALUES ($1, $2);'
 
-    def __init__(self, dsn):
+    def __init__(self, dsn=None):
         self.dsn = dsn or self.DEFAULT_DSN
         self.conn = None
+
+    async def close(self):
+        if self.conn:
+            await self.conn.close()
 
     def _get_migration_scripts(self):
         """
@@ -106,7 +109,7 @@ class Migrator:
         if index <= revision:
             return
 
-        logger.info(f'''[~]  {script_name} Running migration...''')
+        logging.info(f'''[~]  {script_name} Running migration...''')
 
         # Execute the migration script.
         await self._execute_sql_script(script_name)
@@ -114,7 +117,7 @@ class Migrator:
         # Save the migration metadata to the db.
         await self.conn.execute(self._insert_migration, script_name, index)
 
-        logger.info(f'''     ✅''')
+        logging.info(f'''     ✅''')
 
     async def setup(self):
         """
@@ -135,9 +138,9 @@ class Migrator:
     async def list_all_migrations(self):
         revision = await self._get_latest_revision()
         for index, script_name in self._get_migration_scripts():
-            logger.info(f'''[{'x' if index <= revision else ' '}]  {script_name}''')
+            logging.info(f'''[{'x' if index <= revision else ' '}]  {script_name}''')
 
-    async def new_migration_script(self, script_name):
+    async def new_migration_script(self, script_name=None):
         """
         Create a new script in the migrations directory.
 
@@ -165,12 +168,16 @@ class Migrator:
         async with aiofiles.open(filename, 'w') as f:
             await f.write('')
 
-        logger.info(f'Created migration script: {filename}')
+        logging.info(f'Created migration script: {filename}')
 
 
 # -----------------------------------------------
 # Helper functions
 # -----------------------------------------------
+
+def get_migrator(**kwargs):
+    return Migrator(**kwargs)
+
 
 def get_parser():
     description = 'Simple async postgres migrations'
@@ -202,23 +209,26 @@ async def handle():
     parser = get_parser()
     args = parser.parse_args()
 
-    mg = Migrator(args.dsn)
+    mg = get_migrator(dsn=args.dsn)
     await mg.setup()
 
     # List all migrations.
     if args.action == 'list':
         await mg.list_all_migrations()
-        sys.exit(0)
+        await mg.close()
+        return
 
     # Create a new migration file.
     if args.action == 'new':
         await mg.new_migration_script(args.name)
-        sys.exit(0)
+        await mg.close()
+        return
 
     # Run migrations.
     if args.action == 'migrate':
         await mg.run_migrations()
-        sys.exit(0)
+        await mg.close()
+        return
 
     parser.print_help()
 

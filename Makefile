@@ -16,7 +16,7 @@ install:  ## Install dev dependencies
 .PHONY: test
 test:  ## Run tests
 	@echo "Running tests"
-	@poetry run coverage run --source '.' -m unittest
+	@poetry run coverage run --source '.' -m unittest -vvv
 	@poetry run coverage report
 
 .PHONY: database
