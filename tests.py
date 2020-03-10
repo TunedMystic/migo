@@ -12,26 +12,62 @@ DATABASE_DSN = os.getenv('DATABASE_DSN', 'postgresql://postgres:postgres@localho
 MIGRATIONS_DIR = 'sql-test'
 
 
-class MigoTestCase(TestCase):
+class BaseTestCase(TestCase):
+    """
+    This class can be used as a base for async test cases.
+
+    Usage:
+
+        async def test__some_async_thing(self):
+            await some_method()
+
+        async def asyncSetUp(self):
+            await some_setup()
+
+        async def tearDown(self):
+            await some_teardown()
+    """
+
+    def __getattribute__(self, name):
+        """
+        Gather test methods.
+        If method is async, then wrap it in an event loop runner.
+        """
+        attr = super().__getattribute__(name)
+        if name.startswith('test_') and asyncio.iscoroutinefunction(attr):
+            return lambda: asyncio.run(self.async_test_wrapper(attr))
+        else:
+            return attr
+
+    async def async_test_wrapper(self, func):
+        asyncSetUp = getattr(self, 'asyncSetUp', None)
+        await asyncSetUp() if asyncSetUp else None
+
+        await func()
+
+        asyncTearDown = getattr(self, 'asyncTearDown', None)
+        await asyncTearDown() if asyncTearDown else None
+
+
+class MigoTestCase(BaseTestCase):
+    def setUp(self):
+        self.m = migo.Migrator()
+        self.m.MIGRATIONS_DIR = MIGRATIONS_DIR
+
     def tearDown(self):
-        self._remove_migrations_dir()
+        shutil.rmtree(MIGRATIONS_DIR, ignore_errors=True)
 
-    # ---------------------------------------------------------------
-    # Helper methods
-    # ---------------------------------------------------------------
+    async def asyncSetUp(self):
+        await self._drop_tables()
 
-    def _run(self, func):
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(func())
+    async def asyncTearDown(self):
+        await self.m.close()
 
     def _make_migrations_dir(self, filenames=[]):
         os.makedirs(MIGRATIONS_DIR, exist_ok=True)
         for filename in filenames:
             with open(f'{MIGRATIONS_DIR}/{filename}', 'w') as fp:
                 fp.write('select 1;')
-
-    def _remove_migrations_dir(self):
-        shutil.rmtree(MIGRATIONS_DIR, ignore_errors=True)
 
     async def _drop_tables(self):
         conn = await asyncpg.connect(DATABASE_DSN)
@@ -40,84 +76,42 @@ class MigoTestCase(TestCase):
 
 
 class TestMigratorInit(MigoTestCase):
-    def test_migo_connection(self):
-        async def _test():
-            conn = await asyncpg.connect(DATABASE_DSN)
-            row = await conn.fetchrow('''select 'hi' as message;''')
-            self.assertEqual(dict(row), {'message': 'hi'})
+    async def test__connection(self):
+        conn = await asyncpg.connect(DATABASE_DSN)
+        row = await conn.fetchrow('''select 'hi' as message;''')
+        self.assertEqual(dict(row), {'message': 'hi'})
+        await conn.close()
 
-        self._run(_test)
-
-    def test__setup__check_migration_table_exists(self):
-        async def _test():
-            await self._drop_tables()
-
-            m = migo.Migrator()
-            await m.setup()
-
-            # Check that the migrations table exists.
-            await m.conn.execute(m._check_migrations_table)
-            await m.close()
-
-        self._run(_test)
-
-    def test__conn_close_when_no_setup(self):
-        async def _test():
-            m = migo.Migrator()
-            await m.close()
-
-        self._run(_test)
+    async def test__setup__check_migration_table_exists(self):
+        await self.m.setup()
+        # Check that the migrations table exists.
+        await self.m.conn.execute(self.m._check_migrations_table)
 
 
 class TestLatestRevision(MigoTestCase):
-    def test__latest_revision__with_single__migration(self):
-        async def _test():
-            await self._drop_tables()
+    async def test__latest_revision__with_single__migration(self):
+        self.m._execute_sql_script = mock.AsyncMock()
+        await self.m.setup()
 
-            m = migo.Migrator()
-            m._execute_sql_script = mock.AsyncMock()
+        await self.m._run_migration(1, '1_some_migration.sql')
 
-            await m.setup()
-            await m._run_migration(1, '1_some_migration.sql')
+        revision = await self.m._get_latest_revision()
+        self.assertEqual(revision, 1)
 
-            revision = await m._get_latest_revision()
-            await m.close()
+    async def test__latest_revision__with_multiple_migrations(self):
+        self.m._execute_sql_script = mock.AsyncMock()
+        await self.m.setup()
 
-            self.assertEqual(revision, 1)
+        await self.m._run_migration(1, '1_some_migration.sql')
+        await self.m._run_migration(2, '2_another_migration.sql')
 
-        self._run(_test)
+        revision = await self.m._get_latest_revision()
+        self.assertEqual(revision, 2)
 
-    def test__latest_revision__with_multiple_migrations(self):
-        async def _test():
-            await self._drop_tables()
-
-            m = migo.Migrator()
-            m._execute_sql_script = mock.AsyncMock()
-
-            await m.setup()
-            await m._run_migration(1, '1_some_migration.sql')
-            await m._run_migration(2, '2_another_migration.sql')
-
-            revision = await m._get_latest_revision()
-            await m.close()
-
-            self.assertEqual(revision, 2)
-
-        self._run(_test)
-
-    def test__latest_revision_is_zero_when_no_migrations_exist(self):
-        async def _test():
-            await self._drop_tables()
-
-            m = migo.Migrator()
-            await m.setup()
-
-            revision = await m._get_latest_revision()
-            await m.close()
-
-            self.assertEqual(revision, 0)
-
-        self._run(_test)
+    async def test__latest_revision_is_zero_when_no_migrations_exist(self):
+        await self.m.setup()
+        revision = await self.m._get_latest_revision()
+        self.assertEqual(revision, 0)
 
 
 class TestListMigrations(MigoTestCase):
@@ -125,147 +119,97 @@ class TestListMigrations(MigoTestCase):
     # List migrations
     # ---------------------------------------------------------------
 
-    def test__list_all_migrations(self):
-        async def _test():
-            await self._drop_tables()
+    async def test__list_all_migrations(self):
+        self.m._execute_sql_script = mock.AsyncMock()
+        self.m._get_migration_scripts = mock.MagicMock()
+        self.m._get_migration_scripts.return_value = [
+            (1, '1_some_migration.sql'),
+            (2, '2_another_migration.sql'),
+        ]
 
-            m = migo.Migrator()
-
-            m._execute_sql_script = mock.AsyncMock()
-            m._get_migration_scripts = mock.MagicMock()
-            m._get_migration_scripts.return_value = [
-                (1, '1_some_migration.sql'),
-                (2, '2_another_migration.sql'),
-            ]
-
-            await m.setup()
-            await m._run_migration(1, '1_some_migration.sql')
-            await m.list_all_migrations()
-
-            await m.close()
-
-        self._run(_test)
+        await self.m.setup()
+        await self.m._run_migration(1, '1_some_migration.sql')
+        await self.m.list_all_migrations()
 
     # ---------------------------------------------------------------
     # Run migrations
     # ---------------------------------------------------------------
 
-    def test__run_migrations__with_single_migration(self):
-        async def _test():
-            await self._drop_tables()
+    async def test__run_migrations__with_single_migration(self):
+        self.m._execute_sql_script = mock.AsyncMock()
+        self.m._get_migration_scripts = mock.MagicMock()
+        self.m._get_migration_scripts.return_value = [
+            (1, '1_some_migration.sql'),
+        ]
 
-            m = migo.Migrator()
+        await self.m.setup()
+        await self.m.run_migrations()
 
-            m._execute_sql_script = mock.AsyncMock()
-            m._get_migration_scripts = mock.MagicMock()
-            m._get_migration_scripts.return_value = [
-                (1, '1_some_migration.sql'),
-            ]
+        revision = await self.m._get_latest_revision()
+        self.assertEqual(revision, 1)
 
-            await m.setup()
-            await m.run_migrations()
+    async def test__run_migrations__with_migration_that_already_ran(self):
+        self.m._execute_sql_script = mock.AsyncMock()
+        self.m._get_migration_scripts = mock.MagicMock()
+        self.m._get_migration_scripts.return_value = [
+            (1, '1_some_migration.sql'),
+            (2, '2_another_migration.sql'),
+        ]
 
-            revision = await m._get_latest_revision()
-            await m.close()
+        await self.m.setup()
+        await self.m._run_migration(1, '1_some_migration.sql')
+        await self.m.run_migrations()
 
-            self.assertEqual(revision, 1)
-
-        self._run(_test)
-
-    def test__run_migrations__with_migration_that_already_ran(self):
-        async def _test():
-            await self._drop_tables()
-
-            m = migo.Migrator()
-
-            m._execute_sql_script = mock.AsyncMock()
-            m._get_migration_scripts = mock.MagicMock()
-            m._get_migration_scripts.return_value = [
-                (1, '1_some_migration.sql'),
-                (2, '2_another_migration.sql'),
-            ]
-
-            await m.setup()
-            await m._run_migration(1, '1_some_migration.sql')
-            await m.run_migrations()
-
-            revision = await m._get_latest_revision()
-            await m.close()
-
-            self.assertEqual(revision, 2)
-
-        self._run(_test)
+        revision = await self.m._get_latest_revision()
+        self.assertEqual(revision, 2)
 
     # ---------------------------------------------------------------
     # New migration script
     # ---------------------------------------------------------------
 
-    def test__new_migration_script__when_no_migration_scripts_exist(self):
-        async def _test():
-            m = migo.Migrator()
-            m.MIGRATIONS_DIR = MIGRATIONS_DIR
-
-            # Check that no migration scripts exist.
-            self.assertEqual(len(os.listdir(MIGRATIONS_DIR)), 0)
-
-            # Create a new migration script.
-            await m.new_migration_script()
-
-            # Check that one migration script exists, and it startswith '1_'
-            script_names = sorted(os.listdir(MIGRATIONS_DIR))
-            self.assertEqual(len(script_names), 1)
-            self.assertTrue(script_names[-1].startswith('1_'))
-
-        # ------------
-
+    async def test__new_migration_script__when_no_migration_scripts_exist(self):
         self._make_migrations_dir()
-        self._run(_test)
 
-    def test__new_migration_script__when_migration_scripts_exist(self):
-        async def _test():
-            m = migo.Migrator()
-            m.MIGRATIONS_DIR = MIGRATIONS_DIR
+        # Check that no migration scripts exist.
+        self.assertEqual(len(os.listdir(self.m.MIGRATIONS_DIR)), 0)
 
-            # Check that migration script exists.
-            self.assertEqual(len(os.listdir(MIGRATIONS_DIR)), 1)
+        # Create a new migration script.
+        await self.m.new_migration_script()
 
-            # Create a new migration script.
-            await m.new_migration_script()
+        # Check that one migration script exists, and it startswith '1_'
+        script_names = sorted(os.listdir(self.m.MIGRATIONS_DIR))
+        self.assertEqual(len(script_names), 1)
+        self.assertTrue(script_names[-1].startswith('1_'))
 
-            # Check that new migration script exists, and it startswith '2_'
-            script_names = sorted(os.listdir(MIGRATIONS_DIR))
-            self.assertEqual(len(script_names), 2)
-            self.assertTrue(script_names[-1].startswith('2_'))
-
-        # ------------
-
+    async def test__new_migration_script__when_migration_scripts_exist(self):
         self._make_migrations_dir(['1_some_migration.sql'])
-        self._run(_test)
 
-    def test__new_migration_script__with_custom_script_name(self):
-        async def _test():
-            m = migo.Migrator()
-            m.MIGRATIONS_DIR = MIGRATIONS_DIR
+        # Check that migration script exists.
+        self.assertEqual(len(os.listdir(self.m.MIGRATIONS_DIR)), 1)
 
-            # Create a new migration script.
-            await m.new_migration_script('some_custom_migration')
+        # Create a new migration script.
+        await self.m.new_migration_script()
 
-            # Check that the custom migration script exists.
-            script_names = sorted(os.listdir(MIGRATIONS_DIR))
-            self.assertEqual(len(script_names), 1)
-            self.assertEqual(script_names[0], '1_some_custom_migration.sql')
+        # Check that new migration script exists, and it startswith '2_'
+        script_names = sorted(os.listdir(self.m.MIGRATIONS_DIR))
+        self.assertEqual(len(script_names), 2)
+        self.assertTrue(script_names[-1].startswith('2_'))
 
-        # ------------
-
+    async def test__new_migration_script__with_custom_script_name(self):
         self._make_migrations_dir()
-        self._run(_test)
+
+        # Create a new migration script.
+        await self.m.new_migration_script('some_custom_migration')
+
+        # Check that the custom migration script exists.
+        script_names = sorted(os.listdir(self.m.MIGRATIONS_DIR))
+        self.assertEqual(len(script_names), 1)
+        self.assertEqual(script_names[0], '1_some_custom_migration.sql')
 
 
 class TestMigrationScripts(MigoTestCase):
     def test__get_migration_scripts__returns_empty_list_when_no_migrations(self):
-        m = migo.Migrator()
-        m.MIGRATIONS_DIR = MIGRATIONS_DIR
-        scripts = m._get_migration_scripts()
+        scripts = self.m._get_migration_scripts()
 
         self.assertEqual(scripts, [])
 
@@ -275,11 +219,8 @@ class TestMigrationScripts(MigoTestCase):
             'another_migration.sql',
         ])
 
-        m = migo.Migrator()
-        m.MIGRATIONS_DIR = MIGRATIONS_DIR
-
         with self.assertRaises(Exception) as exc:
-            m._get_migration_scripts()
+            self.m._get_migration_scripts()
 
         expected_exception = 'Migration "another_migration.sql" must start with a number'
         self.assertEqual(expected_exception, str(exc.exception))
@@ -291,9 +232,7 @@ class TestMigrationScripts(MigoTestCase):
             '3_another_one.py',
         ])
 
-        m = migo.Migrator()
-        m.MIGRATIONS_DIR = MIGRATIONS_DIR
-        scripts = m._get_migration_scripts()
+        scripts = self.m._get_migration_scripts()
 
         self.assertEqual(scripts, [
             (1, '1_some_migration.sql'),
@@ -307,9 +246,7 @@ class TestMigrationScripts(MigoTestCase):
             '2_another_migration.sql',
         ])
 
-        m = migo.Migrator()
-        m.MIGRATIONS_DIR = MIGRATIONS_DIR
-        scripts = m._get_migration_scripts()
+        scripts = self.m._get_migration_scripts()
 
         self.assertEqual(scripts, [
             (1, '1_some_migration.sql'),
@@ -319,136 +256,95 @@ class TestMigrationScripts(MigoTestCase):
 
 
 class TestExecuteSQLScript(MigoTestCase):
-    def test__execute_sql_script__success(self):
-        async def _test():
-            await self._drop_tables()
-
-            m = migo.Migrator()
-            m.MIGRATIONS_DIR = MIGRATIONS_DIR
-            await m.setup()
-
-            await m._execute_sql_script('1_some_migration.sql')
-            await m.close()
-
-        # ------------
-
+    async def test__execute_sql_script__success(self):
         self._make_migrations_dir(['1_some_migration.sql'])
-        self._run(_test)
+        await self.m.setup()
+        await self.m._execute_sql_script('1_some_migration.sql')
 
-    def test__execute_sql_script__fails_when_script_is_empty(self):
-        async def _test():
-            await self._drop_tables()
-
-            m = migo.Migrator()
-            m.MIGRATIONS_DIR = MIGRATIONS_DIR
-            await m.setup()
-
-            with self.assertRaises(Exception) as exc:
-                await m._execute_sql_script('1_some_migration.sql')
-
-            expected_exception = 'Migration "1_some_migration.sql" is empty'
-            self.assertEqual(expected_exception, str(exc.exception))
-
-            await m.close()
-
-        # ------------
-
+    async def test__execute_sql_script__fails_when_script_is_empty(self):
         self._make_migrations_dir()
 
         # Make an empty migration file.
         with open(f'{MIGRATIONS_DIR}/1_some_migration.sql', 'w') as fp:
             fp.write('')
 
-        self._run(_test)
+        await self.m.setup()
+        with self.assertRaises(Exception) as exc:
+            await self.m._execute_sql_script('1_some_migration.sql')
+
+        expected_exception = 'Migration "1_some_migration.sql" is empty'
+        self.assertEqual(expected_exception, str(exc.exception))
 
 
 class TestParser(MigoTestCase):
-    def test__handle__list_migrations(self):
-        @mock.patch('migo.Migrator.setup')
-        @mock.patch('migo.Migrator.list_all_migrations')
-        async def _test(mock_list_all_migrations, mock_setup):
-            mock_setup.return_value = None
+    @mock.patch('migo.Migrator.setup')
+    @mock.patch('migo.Migrator.list_all_migrations')
+    async def test__handle__list_migrations(self, mock_list_all_migrations, mock_setup):
+        mock_setup.return_value = None
 
-            # The parser will read args from sys.argv.
-            sys.argv = ['migo.py', 'list']
-            await migo.handle()
+        # The parser will read args from sys.argv.
+        sys.argv = ['migo.py', 'list']
+        await migo.handle()
 
-            mock_list_all_migrations.assert_called_once()
+        mock_list_all_migrations.assert_called_once()
 
-        self._run(_test)
+    @mock.patch('migo.Migrator.setup')
+    @mock.patch('migo.Migrator.new_migration_script')
+    async def test__handle__new_migration(self, mock_new_migration_script, mock_setup):
+        mock_setup.return_value = None
 
-    def test__handle__new_migration(self):
-        @mock.patch('migo.Migrator.setup')
-        @mock.patch('migo.Migrator.new_migration_script')
-        async def _test(mock_new_migration_script, mock_setup):
-            mock_setup.return_value = None
+        # The parser will read args from sys.argv.
+        sys.argv = ['migo.py', 'new']
+        await migo.handle()
 
-            # The parser will read args from sys.argv.
-            sys.argv = ['migo.py', 'new']
-            await migo.handle()
+        mock_new_migration_script.assert_called_once()
 
-            mock_new_migration_script.assert_called_once()
+    @mock.patch('migo.Migrator.setup')
+    @mock.patch('migo.Migrator.new_migration_script')
+    async def test__handle__new_migration__with_custom_script(self, mock_new_migration_script, mock_setup):
+        mock_setup.return_value = None
 
-        self._run(_test)
+        # The parser will read args from sys.argv.
+        sys.argv = ['migo.py', 'new', 'some-custom-script']
+        await migo.handle()
 
-    def test__handle__new_migration__with_custom_script(self):
-        @mock.patch('migo.Migrator.setup')
-        @mock.patch('migo.Migrator.new_migration_script')
-        async def _test(mock_new_migration_script, mock_setup):
-            mock_setup.return_value = None
+        mock_new_migration_script.assert_called_once_with('some-custom-script')
 
-            # The parser will read args from sys.argv.
-            sys.argv = ['migo.py', 'new', 'some-custom-script']
-            await migo.handle()
+    @mock.patch('migo.Migrator.setup')
+    @mock.patch('migo.Migrator.run_migrations')
+    async def test__handle__migrate(self, mock_run_migrations, mock_setup):
+        mock_setup.return_value = None
 
-            mock_new_migration_script.assert_called_once_with('some-custom-script')
+        # The parser will read args from sys.argv.
+        sys.argv = ['migo.py', 'migrate']
+        await migo.handle()
 
-        self._run(_test)
+        mock_run_migrations.assert_called_once()
 
-    def test__handle__migrate(self):
-        @mock.patch('migo.Migrator.setup')
-        @mock.patch('migo.Migrator.run_migrations')
-        async def _test(mock_run_migrations, mock_setup):
-            mock_setup.return_value = None
+    @mock.patch('migo.Migrator.setup')
+    @mock.patch('argparse.ArgumentParser.print_help')
+    async def test__handle__help_when_no_args(self, mock_print_help, mock_setup):
+        mock_setup.return_value = None
 
-            # The parser will read args from sys.argv.
-            sys.argv = ['migo.py', 'migrate']
-            await migo.handle()
+        # The parser will read args from sys.argv.
+        sys.argv = ['migo.py']
+        await migo.handle()
 
-            mock_run_migrations.assert_called_once()
+        mock_print_help.assert_called_once()
 
-        self._run(_test)
+    @mock.patch('migo.get_migrator')
+    @mock.patch('migo.Migrator.setup')
+    @mock.patch('argparse.ArgumentParser.print_help')
+    async def test__handle__custom_dsn(self, mock_print_help, mock_setup, mock_get_migrator):
+        mock_setup.return_value = None
+        mock_get_migrator.return_value = migo.Migrator()
 
-    def test__handle__help_when_no_args(self):
-        @mock.patch('migo.Migrator.setup')
-        @mock.patch('argparse.ArgumentParser.print_help')
-        async def _test(mock_print_help, mock_setup):
-            mock_setup.return_value = None
+        # The parser will read args from sys.argv.
+        sys.argv = ['migo.py', '-d', 'postgresql://postgres:postgres@localhost:5432/test']
+        await migo.handle()
 
-            # The parser will read args from sys.argv.
-            sys.argv = ['migo.py']
-            await migo.handle()
-
-            mock_print_help.assert_called_once()
-
-        self._run(_test)
-
-    def test__custom_dsn(self):
-        @mock.patch('migo.get_migrator')
-        @mock.patch('migo.Migrator.setup')
-        @mock.patch('argparse.ArgumentParser.print_help')
-        async def _test(mock_print_help, mock_setup, mock_get_migrator):
-            mock_setup.return_value = None
-            mock_get_migrator.return_value = migo.Migrator()
-
-            # The parser will read args from sys.argv.
-            sys.argv = ['migo.py', '-d', 'postgresql://postgres:postgres@localhost:5432/test']
-            await migo.handle()
-
-            mock_get_migrator.assert_called_once_with(dsn='postgresql://postgres:postgres@localhost:5432/test')
-            mock_print_help.assert_called_once()
-
-        self._run(_test)
+        mock_get_migrator.assert_called_once_with(dsn='postgresql://postgres:postgres@localhost:5432/test')
+        mock_print_help.assert_called_once()
 
     @mock.patch('migo.handle')
     def test__main__entrypoint(self, mock_handle):
