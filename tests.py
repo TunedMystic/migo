@@ -1,5 +1,4 @@
 import asyncio
-import logging
 import os
 import shutil
 import sys
@@ -11,8 +10,6 @@ import migo
 
 DATABASE_DSN = os.getenv('DATABASE_DSN', 'postgresql://postgres:postgres@localhost:5432/postgres')
 MIGRATIONS_DIR = 'sql-test'
-
-logging.basicConfig(level=logging.WARNING)
 
 
 class MigoTestCase(TestCase):
@@ -423,15 +420,32 @@ class TestParser(MigoTestCase):
         self._run(_test)
 
     def test__handle__help_when_no_args(self):
-        @mock.patch('argparse.ArgumentParser.print_help')
         @mock.patch('migo.Migrator.setup')
-        async def _test(mock_setup, mock_print_help):
+        @mock.patch('argparse.ArgumentParser.print_help')
+        async def _test(mock_print_help, mock_setup):
             mock_setup.return_value = None
 
             # The parser will read args from sys.argv.
             sys.argv = ['migo.py']
             await migo.handle()
 
+            mock_print_help.assert_called_once()
+
+        self._run(_test)
+
+    def test__custom_dsn(self):
+        @mock.patch('migo.get_migrator')
+        @mock.patch('migo.Migrator.setup')
+        @mock.patch('argparse.ArgumentParser.print_help')
+        async def _test(mock_print_help, mock_setup, mock_get_migrator):
+            mock_setup.return_value = None
+            mock_get_migrator.return_value = migo.Migrator()
+
+            # The parser will read args from sys.argv.
+            sys.argv = ['migo.py', '-d', 'postgresql://postgres:postgres@localhost:5432/test']
+            await migo.handle()
+
+            mock_get_migrator.assert_called_once_with(dsn='postgresql://postgres:postgres@localhost:5432/test')
             mock_print_help.assert_called_once()
 
         self._run(_test)

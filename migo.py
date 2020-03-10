@@ -9,10 +9,8 @@ import uuid
 import aiofiles
 import asyncpg
 
-log_level = os.getenv('MIGO_LOG_LEVEL', 'INFO')
-log_level = logging.getLevelName(log_level)
+log_level = logging.getLevelName(os.getenv('MIGO_LOG_LEVEL', 'INFO'))
 logging.basicConfig(level=log_level, format='%(message)s')
-logger = logging.getLogger(__name__)
 
 
 class Migrator:
@@ -111,7 +109,7 @@ class Migrator:
         if index <= revision:
             return
 
-        logger.info(f'''[~]  {script_name} Running migration...''')
+        logging.info(f'''[~]  {script_name} Running migration...''')
 
         # Execute the migration script.
         await self._execute_sql_script(script_name)
@@ -119,7 +117,7 @@ class Migrator:
         # Save the migration metadata to the db.
         await self.conn.execute(self._insert_migration, script_name, index)
 
-        logger.info(f'''     ✅''')
+        logging.info(f'''     ✅''')
 
     async def setup(self):
         """
@@ -140,7 +138,7 @@ class Migrator:
     async def list_all_migrations(self):
         revision = await self._get_latest_revision()
         for index, script_name in self._get_migration_scripts():
-            logger.info(f'''[{'x' if index <= revision else ' '}]  {script_name}''')
+            logging.info(f'''[{'x' if index <= revision else ' '}]  {script_name}''')
 
     async def new_migration_script(self, script_name=None):
         """
@@ -170,12 +168,16 @@ class Migrator:
         async with aiofiles.open(filename, 'w') as f:
             await f.write('')
 
-        logger.info(f'Created migration script: {filename}')
+        logging.info(f'Created migration script: {filename}')
 
 
 # -----------------------------------------------
 # Helper functions
 # -----------------------------------------------
+
+def get_migrator(**kwargs):
+    return Migrator(**kwargs)
+
 
 def get_parser():
     description = 'Simple async postgres migrations'
@@ -207,7 +209,7 @@ async def handle():
     parser = get_parser()
     args = parser.parse_args()
 
-    mg = Migrator(args.dsn)
+    mg = get_migrator(dsn=args.dsn)
     await mg.setup()
 
     # List all migrations.
