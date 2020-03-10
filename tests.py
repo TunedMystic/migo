@@ -48,10 +48,8 @@ class BaseTestCase(TestCase):
         asyncTearDown = getattr(self, 'asyncTearDown', None)
         await asyncTearDown() if asyncTearDown else None
 
-    # ---------------------------------------------------------------
-    # Test helper methods
-    # ---------------------------------------------------------------
 
+class MigoTestCase(BaseTestCase):
     def setUp(self):
         self.m = migo.Migrator()
         self.m.MIGRATIONS_DIR = MIGRATIONS_DIR
@@ -77,7 +75,7 @@ class BaseTestCase(TestCase):
         await conn.close()
 
 
-class TestMigratorInit(BaseTestCase):
+class TestMigratorInit(MigoTestCase):
     async def test__connection(self):
         conn = await asyncpg.connect(DATABASE_DSN)
         row = await conn.fetchrow('''select 'hi' as message;''')
@@ -90,7 +88,7 @@ class TestMigratorInit(BaseTestCase):
         await self.m.conn.execute(self.m._check_migrations_table)
 
 
-class TestLatestRevision(BaseTestCase):
+class TestLatestRevision(MigoTestCase):
     async def test__latest_revision__with_single__migration(self):
         self.m._execute_sql_script = mock.AsyncMock()
         await self.m.setup()
@@ -98,7 +96,6 @@ class TestLatestRevision(BaseTestCase):
         await self.m._run_migration(1, '1_some_migration.sql')
 
         revision = await self.m._get_latest_revision()
-
         self.assertEqual(revision, 1)
 
     async def test__latest_revision__with_multiple_migrations(self):
@@ -109,18 +106,15 @@ class TestLatestRevision(BaseTestCase):
         await self.m._run_migration(2, '2_another_migration.sql')
 
         revision = await self.m._get_latest_revision()
-
         self.assertEqual(revision, 2)
 
     async def test__latest_revision_is_zero_when_no_migrations_exist(self):
         await self.m.setup()
-
         revision = await self.m._get_latest_revision()
-
         self.assertEqual(revision, 0)
 
 
-class TestListMigrations(BaseTestCase):
+class TestListMigrations(MigoTestCase):
     # ---------------------------------------------------------------
     # List migrations
     # ---------------------------------------------------------------
@@ -213,7 +207,7 @@ class TestListMigrations(BaseTestCase):
         self.assertEqual(script_names[0], '1_some_custom_migration.sql')
 
 
-class TestMigrationScripts(BaseTestCase):
+class TestMigrationScripts(MigoTestCase):
     def test__get_migration_scripts__returns_empty_list_when_no_migrations(self):
         scripts = self.m._get_migration_scripts()
 
@@ -261,7 +255,7 @@ class TestMigrationScripts(BaseTestCase):
         ])
 
 
-class TestExecuteSQLScript(BaseTestCase):
+class TestExecuteSQLScript(MigoTestCase):
     async def test__execute_sql_script__success(self):
         self._make_migrations_dir(['1_some_migration.sql'])
         await self.m.setup()
@@ -282,7 +276,7 @@ class TestExecuteSQLScript(BaseTestCase):
         self.assertEqual(expected_exception, str(exc.exception))
 
 
-class TestParser(BaseTestCase):
+class TestParser(MigoTestCase):
     @mock.patch('migo.Migrator.setup')
     @mock.patch('migo.Migrator.list_all_migrations')
     async def test__handle__list_migrations(self, mock_list_all_migrations, mock_setup):
