@@ -9,13 +9,8 @@ import uuid
 import aiofiles
 import asyncpg
 
-log_level = logging.getLevelName(os.getenv('MIGO_LOG_LEVEL', 'INFO'))
-logging.basicConfig(level=log_level, format='%(message)s')
-
 
 class Migrator:
-    DEFAULT_DSN = 'postgresql://postgres:postgres@localhost:5432/postgres'
-
     MIGRATIONS_DIR = 'sql'
 
     _create_migrations_table = '''
@@ -32,9 +27,30 @@ class Migrator:
 
     _insert_migration = 'INSERT INTO __migrations (name, revision) VALUES ($1, $2);'
 
-    def __init__(self, dsn=None):
-        self.dsn = dsn or self.DEFAULT_DSN
-        self.conn = None
+    def __init__(self, dsn=None, conn=None, log_level='WARNING'):
+        """
+        Initialize with either a dsn or an asyncpg connection.
+        If both are not provided, then `dsn` will be populated from an env var.
+
+        Args:
+            dsn                 (str|None): The database dsn.
+            conn (asyncpg.connection|None): The database connection.
+            log_level           (str|None): Logging level
+
+        Raises:
+            Exception: When both `dsn` and `conn` are provided.
+                       When `conn` is not an asyncpg.connection.
+        """
+        assert not (conn and dsn), 'Cannot initialize with both dsn and connection'
+        assert not conn or isinstance(conn, asyncpg.Connection), f'{conn} is not asyncpg.connection'
+
+        if not dsn:
+            dsn = os.getenv('DATABASE_DSN')
+
+        self.conn = conn
+        self.dsn = dsn
+
+        logging.basicConfig(level=log_level, format='%(message)s')
 
     async def close(self):
         if self.conn:
@@ -124,7 +140,8 @@ class Migrator:
         Make the db connection and check if the `__migrations` table exists.
         If not, then we create the `__migrations` table.
         """
-        self.conn = await asyncpg.connect(self.dsn)
+        if not self.conn:
+            self.conn = await asyncpg.connect(self.dsn)
 
         try:
             await self.conn.execute(self._check_migrations_table)
@@ -209,7 +226,7 @@ async def handle():
     parser = get_parser()
     args = parser.parse_args()
 
-    mg = get_migrator(dsn=args.dsn)
+    mg = get_migrator(dsn=args.dsn, log_level='INFO')
     await mg.setup()
 
     # List all migrations.

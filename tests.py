@@ -51,7 +51,7 @@ class BaseTestCase(TestCase):
 
 class MigoTestCase(BaseTestCase):
     def setUp(self):
-        self.m = migo.Migrator()
+        self.m = migo.Migrator(dsn=DATABASE_DSN)
         self.m.MIGRATIONS_DIR = MIGRATIONS_DIR
 
     def tearDown(self):
@@ -76,6 +76,22 @@ class MigoTestCase(BaseTestCase):
 
 
 class TestMigratorInit(MigoTestCase):
+    async def test__init__fail_with_both_dsn_and_connection(self):
+        with self.assertRaises(Exception) as exc:
+            conn = await asyncpg.connect(DATABASE_DSN)
+            migo.Migrator(dsn=DATABASE_DSN, conn=conn)
+
+        expected_exception = 'Cannot initialize with both dsn and connection'
+        self.assertEqual(expected_exception, str(exc.exception))
+        await conn.close()
+
+    async def test__init__fail_when_conn_is_not_asyncpg_connection(self):
+        with self.assertRaises(Exception) as exc:
+            migo.Migrator(conn='some-fake-conn')
+
+        expected_exception = f'some-fake-conn is not asyncpg.connection'
+        self.assertEqual(expected_exception, str(exc.exception))
+
     async def test__connection(self):
         conn = await asyncpg.connect(DATABASE_DSN)
         row = await conn.fetchrow('''select 'hi' as message;''')
@@ -86,6 +102,13 @@ class TestMigratorInit(MigoTestCase):
         await self.m.setup()
         # Check that the migrations table exists.
         await self.m.conn.execute(self.m._check_migrations_table)
+
+    async def test__setup__does_not_connect_when_connection_is_provided(self):
+        conn = await asyncpg.connect(DATABASE_DSN)
+        m = migo.Migrator(conn=conn)
+        await m.setup()
+        self.assertEqual(m.conn, conn)
+        await conn.close()
 
 
 class TestLatestRevision(MigoTestCase):
@@ -343,7 +366,7 @@ class TestParser(MigoTestCase):
         sys.argv = ['migo.py', '-d', 'postgresql://postgres:postgres@localhost:5432/test']
         await migo.handle()
 
-        mock_get_migrator.assert_called_once_with(dsn='postgresql://postgres:postgres@localhost:5432/test')
+        mock_get_migrator.assert_called_once_with(dsn='postgresql://postgres:postgres@localhost:5432/test', log_level='INFO')
         mock_print_help.assert_called_once()
 
     @mock.patch('migo.handle')
