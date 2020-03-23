@@ -51,8 +51,7 @@ class BaseTestCase(TestCase):
 
 class MigoTestCase(BaseTestCase):
     def setUp(self):
-        self.m = migo.Migrator(dsn=DATABASE_DSN)
-        self.m.MIGRATIONS_DIR = MIGRATIONS_DIR
+        self.m = migo.Migrator(dsn=DATABASE_DSN, directory=MIGRATIONS_DIR)
 
     def tearDown(self):
         shutil.rmtree(MIGRATIONS_DIR, ignore_errors=True)
@@ -194,13 +193,13 @@ class TestMainMethods(MigoTestCase):
         self._make_migrations_dir()
 
         # Check that no migration scripts exist.
-        self.assertEqual(len(os.listdir(self.m.MIGRATIONS_DIR)), 0)
+        self.assertEqual(len(os.listdir(self.m.directory)), 0)
 
         # Create a new migration script.
         await self.m.new_migration_script()
 
         # Check that one migration script exists, and it startswith '1_'
-        script_names = sorted(os.listdir(self.m.MIGRATIONS_DIR))
+        script_names = sorted(os.listdir(self.m.directory))
         self.assertEqual(len(script_names), 1)
         self.assertTrue(script_names[-1].startswith('1_'))
 
@@ -208,13 +207,13 @@ class TestMainMethods(MigoTestCase):
         self._make_migrations_dir(['1_some_migration.sql'])
 
         # Check that migration script exists.
-        self.assertEqual(len(os.listdir(self.m.MIGRATIONS_DIR)), 1)
+        self.assertEqual(len(os.listdir(self.m.directory)), 1)
 
         # Create a new migration script.
         await self.m.new_migration_script()
 
         # Check that new migration script exists, and it startswith '2_'
-        script_names = sorted(os.listdir(self.m.MIGRATIONS_DIR))
+        script_names = sorted(os.listdir(self.m.directory))
         self.assertEqual(len(script_names), 2)
         self.assertTrue(script_names[-1].startswith('2_'))
 
@@ -225,7 +224,7 @@ class TestMainMethods(MigoTestCase):
         await self.m.new_migration_script('some_custom_migration')
 
         # Check that the custom migration script exists.
-        script_names = sorted(os.listdir(self.m.MIGRATIONS_DIR))
+        script_names = sorted(os.listdir(self.m.directory))
         self.assertEqual(len(script_names), 1)
 #         self.assertEqual(script_names[0], '1_some_custom_migration.sql')
 
@@ -396,7 +395,21 @@ class TestParser(MigoTestCase):
         sys.argv = ['migo.py', '-d', 'postgresql://postgres:postgres@localhost:5432/test']
         await migo.handle()
 
-        mock_get_migrator.assert_called_once_with(dsn='postgresql://postgres:postgres@localhost:5432/test', log_level='INFO')
+        mock_get_migrator.assert_called_once_with(dsn='postgresql://postgres:postgres@localhost:5432/test', directory=None, log_level='INFO')
+        mock_print_help.assert_called_once()
+
+    @mock.patch('migo.get_migrator')
+    @mock.patch('migo.Migrator.setup')
+    @mock.patch('argparse.ArgumentParser.print_help')
+    async def test__handle__custom_directory(self, mock_print_help, mock_setup, mock_get_migrator):
+        mock_setup.return_value = None
+        mock_get_migrator.return_value = migo.Migrator()
+
+        # The parser will read args from sys.argv.
+        sys.argv = ['migo.py', '-s', 'some-other-dir']
+        await migo.handle()
+
+        mock_get_migrator.assert_called_once_with(dsn=None, directory='some-other-dir', log_level='INFO')
         mock_print_help.assert_called_once()
 
     @mock.patch('migo.handle')
