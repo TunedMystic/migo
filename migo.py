@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import logging
 import os
+import time
 import uuid
 
 import aiofiles
@@ -12,6 +13,8 @@ import asyncpg
 
 class Migrator:
     MIGRATIONS_DIR = 'sql'
+    WAIT_ITERATIONS = 15
+    WAIT_SLEEP = 2
 
     _create_migrations_table = '''
         CREATE TABLE IF NOT EXISTS __migrations (
@@ -27,7 +30,7 @@ class Migrator:
 
     _insert_migration = 'INSERT INTO __migrations (name, revision) VALUES ($1, $2);'
 
-    def __init__(self, dsn=None, conn=None, log_level='WARNING'):
+    def __init__(self, dsn=None, conn=None, directory=None, log_level='WARNING'):
         """
         Initialize with either a dsn or an asyncpg connection.
         If both are not provided, then `dsn` will be populated from an env var.
@@ -49,6 +52,7 @@ class Migrator:
 
         self.conn = conn
         self.dsn = dsn
+        self.directory = directory or self.MIGRATIONS_DIR
 
         logging.basicConfig(level=log_level, format='%(message)s')
 
@@ -73,11 +77,11 @@ class Migrator:
         migration_scripts = []
 
         # Create the migrations directory if it does not exist.
-        if not os.path.exists(self.MIGRATIONS_DIR):
-            os.makedirs(self.MIGRATIONS_DIR, exist_ok=True)
+        if not os.path.exists(self.directory):
+            os.makedirs(self.directory, exist_ok=True)
 
         # Gather all the sql scripts.
-        scripts = os.listdir(self.MIGRATIONS_DIR)
+        scripts = os.listdir(self.directory)
         scripts = [name for name in scripts if name.endswith('.sql')]
 
         for script_name in scripts:
@@ -97,7 +101,7 @@ class Migrator:
         Args:
             script_name (str): The name of the migration script.
         """
-        script_path = f'{self.MIGRATIONS_DIR}/{script_name}'
+        script_path = f'{self.directory}/{script_name}'
 
         async with aiofiles.open(script_path, 'r') as f:
             sql = await f.read()
@@ -157,6 +161,22 @@ class Migrator:
         for index, script_name in self._get_migration_scripts():
             logging.info(f'''[{'x' if index <= revision else ' '}]  {script_name}''')
 
+    async def wait_for_database(self):
+        """
+        Wait for the database to become available.
+
+        Raises:
+            Exception: If iterations are exhausted.
+        """
+        for i in range(self.WAIT_ITERATIONS):
+            try:
+                self.conn = await asyncpg.connect(self.dsn, timeout=2)
+                return
+            except Exception:
+                print('.', sep=' ', end='', flush=True)
+                time.sleep(self.WAIT_SLEEP)
+        raise Exception('Could not reach database')
+
     async def new_migration_script(self, script_name=None):
         """
         Create a new script in the migrations directory.
@@ -179,7 +199,7 @@ class Migrator:
         filename = script_name
         if not filename:
             filename = str(uuid.uuid4())[:8]
-        filename = f'{self.MIGRATIONS_DIR}/{index + 1}_{filename}.sql'
+        filename = f'{self.directory}/{index + 1}_{filename}.sql'
 
         # Create the new migration script as an empty file.
         async with aiofiles.open(filename, 'w') as f:
@@ -199,8 +219,9 @@ def get_migrator(**kwargs):
 def get_parser():
     description = 'Simple async postgres migrations'
     parser = argparse.ArgumentParser(description=description)
-    parser.add_argument('-d', '--dsn', help='protocol://user:pass@host:port/db')
-    parser.set_defaults(action=None, dsn=None)
+    parser.add_argument('-d', '--dsn', help='database dsn - protocol://user:pass@host:port/db')
+    parser.add_argument('-s', '--dir', help='migrations directory')
+    parser.set_defaults(action=None, dsn=None, directory=None)
 
     subparsers = parser.add_subparsers(description='')
 
@@ -215,6 +236,9 @@ def get_parser():
     migrate_parser.add_argument('name', nargs='?', help='(optional) name of migration to run')
     migrate_parser.set_defaults(action='migrate')
 
+    migrate_parser = subparsers.add_parser('wait', help='Wait for the database to become available')
+    migrate_parser.set_defaults(action='wait')
+
     return parser
 
 
@@ -226,24 +250,32 @@ async def handle():
     parser = get_parser()
     args = parser.parse_args()
 
-    mg = get_migrator(dsn=args.dsn, log_level='INFO')
-    await mg.setup()
+    mg = get_migrator(dsn=args.dsn, directory=args.dir, log_level='INFO')
 
     # List all migrations.
     if args.action == 'list':
+        await mg.setup()
         await mg.list_all_migrations()
         await mg.close()
         return
 
     # Create a new migration file.
     if args.action == 'new':
+        await mg.setup()
         await mg.new_migration_script(args.name)
         await mg.close()
         return
 
     # Run migrations.
     if args.action == 'migrate':
+        await mg.setup()
         await mg.run_migrations()
+        await mg.close()
+        return
+
+    # Wait for database.
+    if args.action == 'wait':
+        await mg.wait_for_database()
         await mg.close()
         return
 
