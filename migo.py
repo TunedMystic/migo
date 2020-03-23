@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import logging
 import os
+import time
 import uuid
 
 import aiofiles
@@ -12,6 +13,8 @@ import asyncpg
 
 class Migrator:
     MIGRATIONS_DIR = 'sql'
+    WAIT_ITERATIONS = 15
+    WAIT_SLEEP = 2
 
     _create_migrations_table = '''
         CREATE TABLE IF NOT EXISTS __migrations (
@@ -157,6 +160,22 @@ class Migrator:
         for index, script_name in self._get_migration_scripts():
             logging.info(f'''[{'x' if index <= revision else ' '}]  {script_name}''')
 
+    async def wait_for_database(self):
+        """
+        Wait for the database to become available.
+
+        Raises:
+            Exception: If iterations are exhausted.
+        """
+        for i in range(self.WAIT_ITERATIONS):
+            try:
+                self.conn = await asyncpg.connect(self.dsn, timeout=2)
+                return
+            except Exception:
+                print('.', sep=' ', end='', flush=True)
+                time.sleep(self.WAIT_SLEEP)
+        raise Exception('Could not reach database')
+
     async def new_migration_script(self, script_name=None):
         """
         Create a new script in the migrations directory.
@@ -215,6 +234,9 @@ def get_parser():
     migrate_parser.add_argument('name', nargs='?', help='(optional) name of migration to run')
     migrate_parser.set_defaults(action='migrate')
 
+    migrate_parser = subparsers.add_parser('wait', help='Wait for the database to become available')
+    migrate_parser.set_defaults(action='wait')
+
     return parser
 
 
@@ -227,23 +249,31 @@ async def handle():
     args = parser.parse_args()
 
     mg = get_migrator(dsn=args.dsn, log_level='INFO')
-    await mg.setup()
 
     # List all migrations.
     if args.action == 'list':
+        await mg.setup()
         await mg.list_all_migrations()
         await mg.close()
         return
 
     # Create a new migration file.
     if args.action == 'new':
+        await mg.setup()
         await mg.new_migration_script(args.name)
         await mg.close()
         return
 
     # Run migrations.
     if args.action == 'migrate':
+        await mg.setup()
         await mg.run_migrations()
+        await mg.close()
+        return
+
+    # Wait for database.
+    if args.action == 'wait':
+        await mg.wait_for_database()
         await mg.close()
         return
 
